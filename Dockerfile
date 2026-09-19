@@ -50,6 +50,9 @@ COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 
+# Crear directorio de logs y asignar propiedad al usuario sin privilegios
+RUN mkdir -p /app/logs && chown -R appuser:nodejs /app
+
 USER appuser
 
 EXPOSE 4000
