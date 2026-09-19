@@ -9,7 +9,7 @@ WORKDIR /app
 
 # Instalar libc6-compat y dependencias nativas mínimas
 RUN apk add --no-cache libc6-compat
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN corepack enable && corepack prepare pnpm@11.1.2 --activate
 
 # ------------------------------------------------------------------------------
 # 2. Dependencies Stage
