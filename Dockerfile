@@ -16,8 +16,8 @@ RUN corepack enable && corepack prepare pnpm@11.1.2 --activate
 # ------------------------------------------------------------------------------
 FROM base AS dependencies
 
-COPY .npmrc package.json pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile
+COPY .npmrc pnpm-workspace.yaml* package.json pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile --dangerously-allow-all-builds
 
 # ------------------------------------------------------------------------------
 # 3. Build Stage
