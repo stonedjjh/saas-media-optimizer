@@ -3,7 +3,7 @@ import request from 'supertest';
 import sharp from 'sharp';
 import { createApp } from '../src/app.js';
 
-describe('HTTP API Endpoints', () => {
+describe('HTTP API Endpoints (v1)', () => {
   const app = createApp();
 
   async function createSampleBuffer(width = 500, height = 500): Promise<Buffer> {
@@ -34,16 +34,16 @@ describe('HTTP API Endpoints', () => {
     expect(res.body.uptime).toBeDefined();
   });
 
-  it('POST /api/optimize debe procesar un upload en perfil "product" retornando JSON completo con thumbnail y métricas', async () => {
+  it('POST /api/v1/optimize debe procesar un upload en perfil "product" retornando JSON completo con thumbnail y métricas', async () => {
     /**
-     * Evalúa: Flujo normal de subida multipart con perfil product.
+     * Evalúa: Flujo normal de subida multipart en endpoint versionado /api/v1/optimize.
      * Necesita: Archivo JPEG adjunto en el campo 'file'.
      * Resultado esperado: status 200, success true, objetos 'original', 'optimized' y 'thumbnail' con dataUri.
      */
     const sampleBuffer = await createSampleBuffer(1500, 1000);
 
     const res = await request(app)
-      .post('/api/optimize')
+      .post('/api/v1/optimize')
       .field('profile', 'product')
       .attach('file', sampleBuffer, 'test-product.jpg');
 
@@ -60,16 +60,16 @@ describe('HTTP API Endpoints', () => {
     expect(res.body.thumbnail.dataUri).toMatch(/^data:image\/webp;base64,/);
   });
 
-  it('POST /api/optimize?format=binary debe entregar el stream binario directo de la imagen optimizada', async () => {
+  it('POST /api/v1/optimize?format=binary debe entregar el stream binario directo de la imagen optimizada', async () => {
     /**
-     * Evalúa: Modo proxy o tubería binaria directa.
+     * Evalúa: Modo proxy o tubería binaria directa en /api/v1/optimize.
      * Necesita: Query param format=binary y archivo adjunto.
      * Resultado esperado: status 200, Content-Type "image/webp", cabeceras de tamaño y compresión.
      */
     const sampleBuffer = await createSampleBuffer(600, 400);
 
     const res = await request(app)
-      .post('/api/optimize?format=binary')
+      .post('/api/v1/optimize?format=binary')
       .field('profile', 'product')
       .attach('file', sampleBuffer, 'binary-test.jpg');
 
@@ -80,13 +80,30 @@ describe('HTTP API Endpoints', () => {
     expect(res.body.length).toBeGreaterThan(0);
   });
 
-  it('POST /api/optimize debe rechazar peticiones sin archivo con código 400', async () => {
+  it('POST /api/optimize (alias retrocompatible) debe procesar peticiones exactamente igual', async () => {
+    /**
+     * Evalúa: Alias /api/optimize para garantizar retrocompatibilidad.
+     * Necesita: Archivo adjunto.
+     * Resultado esperado: status 200, success true.
+     */
+    const sampleBuffer = await createSampleBuffer(400, 400);
+
+    const res = await request(app)
+      .post('/api/optimize')
+      .field('profile', 'product')
+      .attach('file', sampleBuffer, 'alias-test.jpg');
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+  });
+
+  it('POST /api/v1/optimize debe rechazar peticiones sin archivo con código 400', async () => {
     /**
      * Evalúa: Validación de payload multipart.
      * Necesita: Petición sin adjunto.
      * Resultado esperado: status 400, success false y mensaje descriptivo.
      */
-    const res = await request(app).post('/api/optimize').field('profile', 'product');
+    const res = await request(app).post('/api/v1/optimize').field('profile', 'product');
 
     expect(res.status).toBe(400);
     expect(res.body.success).toBe(false);

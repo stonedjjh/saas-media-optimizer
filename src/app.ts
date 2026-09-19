@@ -1,8 +1,7 @@
 import express, { Express, Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
-import { upload } from './middleware/upload.js';
-import { optimizeHandler } from './controllers/optimize.controller.js';
+import { v1Router } from './routes/v1.router.js';
 
 export function createApp(): Express {
   const app = express();
@@ -24,8 +23,11 @@ export function createApp(): Express {
     });
   });
 
-  // Endpoint de optimización
-  app.post('/api/optimize', upload.single('file'), optimizeHandler);
+  // Endpoints versionados
+  app.use('/api/v1', v1Router);
+
+  // Alias retrocompatible por conveniencia
+  app.use('/api', v1Router);
 
   // Manejo de errores global
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {

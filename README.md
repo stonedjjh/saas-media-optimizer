@@ -25,11 +25,12 @@ The service is engineered to avoid disk input/output overhead and residual tempo
 ## Architectural Principles
 
 1. **Pure In-Memory Processing:** Multipart buffers are accepted via `multer.memoryStorage()` and piped directly into `sharp` stream pipelines without filesystem writes.
-2. **Dual-Mode Consumption:**
+2. **Strict API Versioning:** All endpoints are strictly isolated under `/api/v1/` routes for predictable API evolution and backward-compatibility.
+3. **Dual-Mode Consumption:**
    - **JSON Mode (Default):** Returns full analytical telemetry (original vs. optimized size, dimensions, compression ratio) together with Base64 Data URIs ready for persistence into databases or cloud object stores.
-   - **Direct Binary Mode (`Accept: image/webp` or `?format=binary`):** Emits optimized binary streams directly with native HTTP response headers for piping into image caches, CDNs, or file down loaders.
-3. **EXIF Stripping:** Automatically removes location, camera, and device metadata from output buffers to guarantee consumer privacy.
-4. **Strict Quality Encoders:** Uses WebP algorithms tailored per domain (`product` vs. `brand-logo`).
+   - **Direct Binary Mode (`Accept: image/webp` or `?format=binary`):** Emits optimized binary streams directly with native HTTP response headers for piping into image caches, CDNs, or file downloaders.
+4. **EXIF Stripping:** Automatically removes location, camera, and device metadata from output buffers to guarantee consumer privacy.
+5. **Strict Quality Encoders:** Uses WebP algorithms tailored per domain (`product` vs. `brand-logo`).
 
 ---
 
@@ -122,13 +123,13 @@ curl -X GET http://localhost:4000/health
 
 ---
 
-### 2. Media Optimization (Default JSON Mode)
+### 2. Media Optimization (v1 Default JSON Mode)
 
-Uploads an image for the `product` profile.
+Uploads an image for the `product` profile using the versioned endpoint `/api/v1/optimize`.
 
 #### Request
 ```bash
-curl -X POST http://localhost:4000/api/optimize \
+curl -X POST http://localhost:4000/api/v1/optimize \
   -F "file=@/path/to/heavy-image.jpg" \
   -F "profile=product"
 ```
@@ -171,7 +172,7 @@ Processes a brand logo, trims transparent edges and maintains alpha fidelity.
 
 #### Request
 ```bash
-curl -X POST http://localhost:4000/api/optimize \
+curl -X POST http://localhost:4000/api/v1/optimize \
   -F "file=@/path/to/logo-with-borders.png" \
   -F "profile=brand-logo" \
   -F "trim=true"
@@ -207,7 +208,7 @@ Streams binary WebP bytes directly to disk or downstream consumers.
 
 #### Request
 ```bash
-curl -X POST "http://localhost:4000/api/optimize?format=binary" \
+curl -X POST "http://localhost:4000/api/v1/optimize?format=binary" \
   -F "file=@/path/to/photo.jpg" \
   -F "profile=product" \
   --output optimized-image.webp
