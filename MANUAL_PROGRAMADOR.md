@@ -1,15 +1,17 @@
 # Manual del Programador - saas-media-optimizer
 
 ## 1. Arquitectura General
-`saas-media-optimizer` es un microservicio stateless de alto rendimiento diseñado para la ingesta, validación, transformación, redimensionamiento y compresión de imágenes en memoria sin escribir archivos temporales a disco.
+`saas-media-optimizer` es un microservicio stateless de alto rendimiento diseñado para la ingesta, validación, transformación, redimensionamiento y compresión de imágenes en memoria sin escribir archivos temporales a disco, equipado con defensas perimetrales de nivel empresarial.
 
 ### Principios Arquitectónicos
 - **Procesamiento en memoria:** Todo el flujo se procesa a través de Streams y Buffers de Node.js con `sharp` (basado en `libvips` C++).
-- **Aislamiento e inmutabilidad:** No almacena archivos residuales en el sistema de archivos local.
-- **Versionado Semántico de APIs:** La lógica se expone mediante enrutadores modulares bajo `/api/v1` garantizando evolución de contratos sin roturas.
-- **Soporte Dual de Consumo:**
-  - **Modo JSON (default):** Provee metadatos de compresión, resolución original/final y cadenas Data URI (o Base64) para consumo directo en paneles administrativos y persistencia en bases de datos o S3.
-  - **Modo Binario (`format=binary` o `Accept: image/webp`):** Opera como proxy/tubería entregando directamente el binario WebP optimizado con cabeceras HTTP nativas.
+- **Aislamiento e inmutabilidad:** No almacena archivos multimedia residuales en el sistema de archivos local.
+- **Defensa Perimetral y Mitigación de Abusos:**
+  - **API Key Opcional (`src/middleware/auth.ts`):** Modo abierto si no se define en `.env`, y estricto 401 si se define.
+  - **Rate Limiting (`src/middleware/rateLimit.ts`):** Límites configurables por ventana temporal con cabeceras estándar y 429 Too Many Requests.
+  - **Semáforo de Concurrencia Sharp (`src/core/concurrency.ts`):** Aislamiento de memoria RAM evitando OOM crashes bajo ráfagas intensivas mediante cola finita y 503 Service Unavailable.
+- **Observabilidad Automatizada:**
+  - **Logger Asíncrono (`src/core/logger.ts`):** Integración con `pino` y `rotating-file-stream` registrando métricas en consola y en volumen persistente `./logs` con rotación diaria, compresión `.gz` y retención configurable (`LOG_RETENTION_DAYS`).
 
 ---
 
@@ -20,31 +22,30 @@
 - **Dependencias:** `sharp`.
 - **Funciones Principales / API:**
   - `optimizeProduct(buffer: Buffer): Promise<ProductOptimizationOutput>`
-    - *Optimiza imágenes de catálogo de producto: redimensiona dentro de un recuadro de 1200x1200px conservando aspect ratio, convierte a WebP con calidad 82%, remueve metadatos EXIF sensibles y produce un thumbnail complementario de 200x200px.*
+    - *Redimensiona dentro de 1200x1200px (conservando aspect ratio), convierte a WebP q=82%, remueve metadatos EXIF sensibles y produce un thumbnail complementario de 200x200px.*
   - `optimizeBrandLogo(buffer: Buffer, options?: { trim?: boolean }): Promise<BrandLogoOptimizationOutput>`
-    - *Optimiza logotipos de marca o fabricantes: redimensiona a máx 400x200px preservando canal alfa (transparencia) y recorta automáticamente bordes vacíos mediante `trim()` si se especifica.*
+    - *Redimensiona a máx 400x200px preservando canal alfa (transparencia) y recorta bordes vacíos con `trim()` si se especifica.*
 
-### `ExpressApp` (`src/app.ts`)
-- **Ruta / Uso:** Configuración del servidor HTTP, middlewares globales (`cors`, `helmet`, `express.json`) y montaje de routers `/api/v1` (y `/api` como alias).
-- **Dependencias:** `express`, `cors`, `helmet`, `v1Router`.
-
-### `v1Router` (`src/routes/v1.router.ts`)
-- **Ruta / Uso:** Enrutador de la versión 1 de la API (`/api/v1/optimize`).
-- **Dependencias:** `upload` (multer en memoria), `optimizeHandler`.
-
-### `OptimizeController` (`src/controllers/optimize.controller.ts`)
-- **Ruta / Uso:** Manejador de la ruta `POST /api/v1/optimize`.
-- **Dependencias:** `ImageOptimizer`.
+### `ConcurrencyLimiter` (`src/core/concurrency.ts`)
+- **Ruta / Uso:** Gestor de concurrencia y cola de trabajo de Sharp en memoria.
 - **Funciones Principales / API:**
-  - `optimizeHandler(req: Request, res: Response, next: NextFunction): Promise<void>`
-    - *Valida el archivo multipart en memoria, procesa según el perfil (`product` o `brand-logo`) y emite respuesta JSON o binaria según encabezados o query params.*
+  - `run<T>(fn: () => Promise<T>): Promise<T>` -> *Ejecuta una función respetando `MAX_CONCURRENT_JOBS` o la coloca en cola hasta `MAX_QUEUE_WAITING`. Si la cola se colapsa, lanza error 503.*
+  - `getStats()` -> *Retorna el estado de trabajos activos y en espera.*
+
+### `apiKeyAuth` (`src/middleware/auth.ts`)
+- **Ruta / Uso:** Middleware de protección de rutas `/api`.
+- **Funciones Principales / API:**
+  - `apiKeyAuth(req: Request, res: Response, next: NextFunction): void` -> *Verifica cabeceras `x-api-key` o `Authorization: Bearer` contra `process.env.API_KEY`.*
+
+### `apiRateLimiter` (`src/middleware/rateLimit.ts`)
+- **Ruta / Uso:** Middleware limitador de peticiones por IP.
 
 ---
 
 ## 3. Endpoints de la API
 
 ### `GET /health`
-- **Descripción:** Chequeo de operatividad y estado del servicio.
+- **Descripción:** Chequeo de operatividad, uptime y estadísticas de concurrencia.
 - **Respuesta:**
   ```json
   {
@@ -52,44 +53,19 @@
     "uptime": 12.34,
     "timestamp": "2026-09-19T11:00:00.000Z",
     "service": "saas-media-optimizer",
-    "version": "1.0.0"
+    "version": "1.0.0",
+    "concurrency": {
+      "activeJobs": 0,
+      "queuedJobs": 0,
+      "maxConcurrent": 4,
+      "maxQueue": 10
+    }
   }
   ```
 
 ### `POST /api/v1/optimize` (Alias: `POST /api/optimize`)
-- **Content-Type:** `multipart/form-data`
-- **Campos:**
+- **Cabeceras:** `x-api-key: <token>` (opcional según configuración de entorno).
+- **Campos Multipart:**
   - `file` (File, requerido, máx 25MB).
   - `profile` (string, opcional, valores: `product` [default] | `brand-logo`).
   - `trim` (boolean, opcional para brand-logo).
-- **Respuesta JSON (default):**
-  ```json
-  {
-    "success": true,
-    "profile": "product",
-    "original": {
-      "format": "jpeg",
-      "width": 4000,
-      "height": 4000,
-      "sizeBytes": 15728640
-    },
-    "optimized": {
-      "format": "webp",
-      "width": 1200,
-      "height": 1200,
-      "sizeBytes": 184320,
-      "compressionRatio": "98.83%",
-      "dataUri": "data:image/webp;base64,..."
-    },
-    "thumbnail": {
-      "format": "webp",
-      "width": 200,
-      "height": 200,
-      "sizeBytes": 12400,
-      "compressionRatio": "99.92%",
-      "dataUri": "data:image/webp;base64,..."
-    }
-  }
-  ```
-- **Respuesta Binaria (`?format=binary` o `Accept: image/webp`):**
-  - Devuelve directamente el buffer de la imagen optimizada con `Content-Type: image/webp` y headers informativos (`X-Original-Size-Bytes`, `X-Optimized-Width`, `X-Optimized-Height`, `X-Compression-Ratio`).

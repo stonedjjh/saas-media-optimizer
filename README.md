@@ -16,21 +16,20 @@
 
 ## Technical Overview
 
-`saas-media-optimizer` is a high-performance, stateless microservice dedicated to real-time media ingestion, inspection, transformation, downscaling, and compression entirely in memory (RAM) utilizing `sharp` (`libvips` C++ engine) and Node.js 22 LTS.
+`saas-media-optimizer` is an enterprise-grade, stateless microservice dedicated to real-time media ingestion, inspection, transformation, downscaling, and compression entirely in memory (RAM) utilizing `sharp` (`libvips` C++ engine) and Node.js 22 LTS.
 
-The service is engineered to avoid disk input/output overhead and residual temporary files. It accommodates payload uploads up to 25 MB and 4000x4000px, delivering optimized WebP representations alongside high-density thumbnails and compression telemetry.
+The service incorporates production hardening features: optional API Key authentication, IP-based rate limiting, concurrency queue management to eliminate Out-Of-Memory (OOM) risks, and structured multi-stream logging with automated daily rotation and gzip compression.
 
 ---
 
-## Architectural Principles
+## Architectural Principles & Hardening
 
 1. **Pure In-Memory Processing:** Multipart buffers are accepted via `multer.memoryStorage()` and piped directly into `sharp` stream pipelines without filesystem writes.
-2. **Strict API Versioning:** All endpoints are strictly isolated under `/api/v1/` routes for predictable API evolution and backward-compatibility.
-3. **Dual-Mode Consumption:**
-   - **JSON Mode (Default):** Returns full analytical telemetry (original vs. optimized size, dimensions, compression ratio) together with Base64 Data URIs ready for persistence into databases or cloud object stores.
-   - **Direct Binary Mode (`Accept: image/webp` or `?format=binary`):** Emits optimized binary streams directly with native HTTP response headers for piping into image caches, CDNs, or file downloaders.
-4. **EXIF Stripping:** Automatically removes location, camera, and device metadata from output buffers to guarantee consumer privacy.
-5. **Strict Quality Encoders:** Uses WebP algorithms tailored per domain (`product` vs. `brand-logo`).
+2. **Strict API Versioning:** All endpoints are strictly isolated under `/api/v1/` routes with backward-compatible `/api/` aliases.
+3. **Optional API Key Security:** Supports optional protection via `x-api-key` or `Authorization: Bearer <token>`. In local development without `API_KEY` set, it runs in frictionless open mode.
+4. **Rate Limiting:** Protects endpoints with standard `RateLimit-*` headers and automatic `429 Too Many Requests` responses.
+5. **Sharp Concurrency Semaphore:** Manages concurrent image processing (`MAX_CONCURRENT_JOBS`) and graceful request queueing (`MAX_QUEUE_WAITING`). Emits `503 Service Unavailable` with `Retry-After` if limits are exceeded.
+6. **Zero-Maintenance Structured Logging:** High-performance asynchronous logging with `pino` and `rotating-file-stream` writing structured JSON logs with daily rotation, `.gz` archival, and automated retention cleanup.
 
 ---
 
@@ -47,7 +46,7 @@ The service is engineered to avoid disk input/output overhead and residual tempo
 
 - **Node.js:** 22.x LTS or higher
 - **Package Manager:** `pnpm` (version 10 or 11 recommended)
-- **Container Runtime:** Docker Engine 24+ and Docker Compose (optional for containerized deployments)
+- **Container Runtime:** Docker Engine 24+ and Docker Compose
 
 ---
 
@@ -56,16 +55,21 @@ The service is engineered to avoid disk input/output overhead and residual tempo
 | Variable | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `PORT` | Number | `4000` | Port on which the HTTP server listens |
-| `NODE_ENV` | String | `development` | Application runtime environment (`development`, `production`, `test`) |
-| `MAX_FILE_SIZE_MB` | Number | `25` | Maximum multipart upload file size in megabytes |
-| `MAX_IMAGE_DIMENSION` | Number | `4000` | Maximum allowable pixel dimension for input media |
+| `NODE_ENV` | String | `development` | Runtime environment (`development`, `production`, `test`) |
+| `API_KEY` | String | *Empty* | Optional API Key. If empty, endpoints run publicly. If defined, requires authentication |
+| `RATE_LIMIT_WINDOW_MS` | Number | `60000` | Rate limiting sliding window in milliseconds (1 minute) |
+| `RATE_LIMIT_MAX` | Number | `60` | Maximum requests allowed per IP during window |
+| `MAX_CONCURRENT_JOBS` | Number | `4` | Maximum Sharp compression tasks running in parallel |
+| `MAX_QUEUE_WAITING` | Number | `10` | Maximum requests queued before triggering HTTP 503 |
+| `LOG_RETENTION_DAYS` | Number | `30` | Number of days to retain rotated `.log.gz` archives before automatic purge |
+| `LOG_LEVEL` | String | `info` | Minimum log severity level (`trace`, `debug`, `info`, `warn`, `error`) |
 
 ---
 
 ## Installation & Local Execution
 
 ```bash
-# Clone the repository
+# Clone repository
 git clone https://github.com/stonedjjh/saas-media-optimizer.git
 cd saas-media-optimizer
 
@@ -75,7 +79,7 @@ pnpm install
 # Start in development mode with hot-reload
 pnpm run dev
 
-# Compile TypeScript production bundle
+# Compile TypeScript bundle
 pnpm run build
 
 # Start production server
@@ -86,16 +90,14 @@ pnpm start
 
 ## Containerized Deployment (Docker)
 
-The repository provides a multi-stage `Dockerfile` based on `node:22-alpine`, optimized for libvips and non-root execution (`appuser`).
+The repository provides a multi-stage `Dockerfile` based on `node:22-alpine` with non-root security (`appuser`) and mounted log volume.
 
 ```bash
 # Build and run container with docker-compose
 docker compose up -d --build
 
-# Inspect container health
+# Inspect container health and logs
 docker compose ps
-
-# View service logs
 docker compose logs -f
 ```
 
@@ -103,7 +105,7 @@ docker compose logs -f
 
 ## API Specification & Examples
 
-### 1. Health Check
+### 1. Health Check (Always Public)
 
 #### Request
 ```bash
@@ -114,22 +116,26 @@ curl -X GET http://localhost:4000/health
 ```json
 {
   "status": "ok",
-  "uptime": 45.21,
-  "timestamp": "2026-09-19T11:15:00.000Z",
+  "uptime": 124.52,
+  "timestamp": "2026-09-19T11:45:00.000Z",
   "service": "saas-media-optimizer",
-  "version": "1.0.0"
+  "version": "1.0.0",
+  "concurrency": {
+    "activeJobs": 0,
+    "queuedJobs": 0,
+    "maxConcurrent": 4,
+    "maxQueue": 10
+  }
 }
 ```
 
 ---
 
-### 2. Media Optimization (v1 Default JSON Mode)
+### 2. Media Optimization (JSON Mode)
 
-Uploads an image for the `product` profile using the versioned endpoint `/api/v1/optimize`.
-
-#### Request
 ```bash
 curl -X POST http://localhost:4000/api/v1/optimize \
+  -H "x-api-key: your-secret-api-key" \
   -F "file=@/path/to/heavy-image.jpg" \
   -F "profile=product"
 ```
@@ -166,49 +172,11 @@ curl -X POST http://localhost:4000/api/v1/optimize \
 
 ---
 
-### 3. Logo Optimization with Transparent Trimming
+### 3. Direct Binary Streaming Mode (Pipe / CDN Proxy)
 
-Processes a brand logo, trims transparent edges and maintains alpha fidelity.
-
-#### Request
-```bash
-curl -X POST http://localhost:4000/api/v1/optimize \
-  -F "file=@/path/to/logo-with-borders.png" \
-  -F "profile=brand-logo" \
-  -F "trim=true"
-```
-
-#### Response (`200 OK`)
-```json
-{
-  "success": true,
-  "profile": "brand-logo",
-  "original": {
-    "format": "png",
-    "width": 1000,
-    "height": 500,
-    "sizeBytes": 240000
-  },
-  "optimized": {
-    "format": "webp",
-    "width": 400,
-    "height": 180,
-    "sizeBytes": 22400,
-    "compressionRatio": "90.67%",
-    "dataUri": "data:image/webp;base64,UklGRmAAAABXRUJQVlA4..."
-  }
-}
-```
-
----
-
-### 4. Direct Binary Streaming Mode (Pipe / CDN Proxy)
-
-Streams binary WebP bytes directly to disk or downstream consumers.
-
-#### Request
 ```bash
 curl -X POST "http://localhost:4000/api/v1/optimize?format=binary" \
+  -H "x-api-key: your-secret-api-key" \
   -F "file=@/path/to/photo.jpg" \
   -F "profile=product" \
   --output optimized-image.webp
@@ -227,12 +195,10 @@ X-Compression-Ratio: 98.83%
 
 ---
 
-## Test Suite
-
-The test suite runs on `vitest` and `supertest`, executing end-to-end multipart validations and in-memory buffer transformations.
+## Automated Test Suite
 
 ```bash
-# Run automated tests once
+# Execute test suite (Vitest + Supertest)
 pnpm test
 
 # Run tests in watch mode

@@ -3,15 +3,16 @@ dist
 .env
 .env.local
 
+# Logs generados localmente
+logs
+*.log
+*.log.gz
+
 # Bitácoras y temporales de trabajo (según reglas globales)
 BITACORA.md
 BITACORA_HISTORICO.md
 temp_*
 
-# Logs y cobertura de pruebas
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
+# Cobertura de pruebas
 coverage
 .nyc_output

@@ -1,7 +1,11 @@
 import { Request, Response, NextFunction } from 'express';
 import { ImageOptimizer, OptimizationProfile } from '../core/optimizer.js';
+import { sharpConcurrencyLimiter } from '../core/concurrency.js';
+import { logger } from '../core/logger.js';
 
 export async function optimizeHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
+  const startTime = Date.now();
+
   try {
     if (!req.file || !req.file.buffer) {
       res.status(400).json({
@@ -22,8 +26,22 @@ export async function optimizeHandler(req: Request, res: Response, next: NextFun
       acceptHeader.includes('image/webp') ||
       acceptHeader.includes('image/*');
 
+    // Procesar bajo el semáforo de concurrencia en memoria
     if (profile === 'brand-logo') {
-      const result = await ImageOptimizer.optimizeBrandLogo(req.file.buffer, { trim });
+      const result = await sharpConcurrencyLimiter.run(() =>
+        ImageOptimizer.optimizeBrandLogo(req.file!.buffer, { trim })
+      );
+
+      const durationMs = Date.now() - startTime;
+      logger.info({
+        action: 'image_optimized',
+        profile: 'brand-logo',
+        originalBytes: result.original.sizeBytes,
+        optimizedBytes: result.optimized.sizeBytes,
+        compressionRatio: result.optimized.compressionRatio,
+        durationMs,
+        ip: req.ip,
+      });
 
       if (isBinaryRequested) {
         res.setHeader('Content-Type', 'image/webp');
@@ -53,10 +71,22 @@ export async function optimizeHandler(req: Request, res: Response, next: NextFun
     }
 
     // Perfil por defecto: 'product'
-    const result = await ImageOptimizer.optimizeProduct(req.file.buffer);
+    const result = await sharpConcurrencyLimiter.run(() =>
+      ImageOptimizer.optimizeProduct(req.file!.buffer)
+    );
+
+    const durationMs = Date.now() - startTime;
+    logger.info({
+      action: 'image_optimized',
+      profile: 'product',
+      originalBytes: result.original.sizeBytes,
+      optimizedBytes: result.optimized.sizeBytes,
+      compressionRatio: result.optimized.compressionRatio,
+      durationMs,
+      ip: req.ip,
+    });
 
     if (isBinaryRequested) {
-      // Si solicita binario y es 'product', se sirve la imagen principal optimizada
       res.setHeader('Content-Type', 'image/webp');
       res.setHeader('Content-Length', result.optimized.sizeBytes);
       res.setHeader('X-Original-Size-Bytes', result.original.sizeBytes);
@@ -89,6 +119,17 @@ export async function optimizeHandler(req: Request, res: Response, next: NextFun
       },
     });
   } catch (error: any) {
+    if (error.statusCode === 503) {
+      if (error.retryAfter) {
+        res.setHeader('Retry-After', error.retryAfter);
+      }
+      res.status(503).json({
+        success: false,
+        error: error.message,
+        retryAfterSeconds: error.retryAfter || 5,
+      });
+      return;
+    }
     next(error);
   }
 }
