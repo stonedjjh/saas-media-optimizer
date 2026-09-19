@@ -16,7 +16,7 @@ RUN npm install -g pnpm@12.4.2
 # ------------------------------------------------------------------------------
 FROM base AS dependencies
 
-COPY .npmrc package.json pnpm-lock.yaml ./
+COPY .npmrc pnpm-workspace.yaml package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 
 # ------------------------------------------------------------------------------
@@ -25,7 +25,7 @@ RUN pnpm install --frozen-lockfile
 FROM base AS builder
 
 COPY --from=dependencies /app/node_modules ./node_modules
-COPY package.json tsconfig.json ./
+COPY .npmrc pnpm-workspace.yaml package.json tsconfig.json ./
 COPY src ./src
 
 RUN pnpm run build
