@@ -9,15 +9,15 @@ WORKDIR /app
 
 # Instalar libc6-compat y dependencias nativas mínimas
 RUN apk add --no-cache libc6-compat
-RUN corepack enable && corepack prepare pnpm@11.1.2 --activate
+RUN npm install -g pnpm@12.4.2
 
 # ------------------------------------------------------------------------------
 # 2. Dependencies Stage
 # ------------------------------------------------------------------------------
 FROM base AS dependencies
 
-COPY .npmrc pnpm-workspace.yaml* package.json pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile --dangerously-allow-all-builds
+COPY .npmrc package.json pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
 
 # ------------------------------------------------------------------------------
 # 3. Build Stage
